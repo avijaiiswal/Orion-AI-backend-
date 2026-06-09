@@ -1,0 +1,11 @@
+{
+  "name": "orion-ai-hub-backend",
+  "version": "1.0.0",
+  "description": "Serverless API backend for Orion AI Hub",
+  "main": "api/analyze.js",
+  "dependencies": {
+    "@supabase/supabase-js": "^2.39.0",
+    "@google/generative-ai": "^0.1.0",
+    "groq-sdk": "^0.3.0"
+  }
+}
