@@ -2,100 +2,81 @@ import { createClient } from '@supabase/supabase-js';
 import { GoogleGenAI } from '@google/generative-ai';
 import { Groq } from 'groq-sdk';
 
-// Env variables setup (Vercel Dashboard se configure honge baad me)
-const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-const supabase = createClient(supabaseUrl, supabaseKey);
+// Initialize Supabase Connection using Vercel Environment Variables
+const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY);
 
 export default async function handler(req, res) {
-    // OPTIONS request check (CORS configuration)
+    // CORS headers handle karne ke liye taaki frontend se fetch fail na ho
+    res.setHeader('Access-Control-Allow-Credentials', true);
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
+    res.setHeader('Access-Control-Allow-Headers', 'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version');
+
     if (req.method === 'OPTIONS') {
         return res.status(200).end();
     }
 
     if (req.method !== 'POST') {
-        return res.status(405).json({ error: "Method not allowed, use POST" });
+        return res.status(405).json({ error: 'Method not allowed' });
     }
 
-    const { toolMode, textPrompt, imageBase64 } = req.body;
+    const { email, token, textInput, imageBase64, currentTool } = req.body;
 
     try {
-        // 1. ToolMode ke hisab se provider select karein
-        const isImageTool = (toolMode === 'pitch' || toolMode === 'thumbnail_audit');
-        const requiredProvider = isImageTool ? 'gemini' : 'groq';
-
-        // 2. Supabase se active keys rotation algorithm chalayein
-        const { data: keys, error } = await supabase
+        // 1. Supabase se active keys uthana
+        const { data: keys, error: keyError } = await supabase
             .from('api_keys')
             .select('*')
-            .eq('provider', requiredProvider)
-            .eq('status', 'active')
-            .order('id', { ascending: true });
+            .eq('status', 'active');
 
-        if (error || !keys || keys.length === 0) {
-            throw new Error(`Bhai database mein ${requiredProvider} ki koi active key nahi mili!`);
+        if (keyError || !keys || keys.length === 0) {
+            return res.status(500).json({ error: "Bhai, database me koi active key nahi mili!" });
         }
 
-        let aiResponse = "";
-        let success = false;
+        const geminiKeys = keys.filter(k => k.provider === 'gemini');
+        const groqKeys = keys.filter(k => k.provider === 'groq');
 
-        // 3. Fallback Rotation Loop (8+ Keys bulletproof system)
-        for (let keyObj of keys) {
-            try {
-                if (requiredProvider === 'groq') {
-                    // --- GROQ EXECUTION ---
-                    const groq = new Groq({ apiKey: keyObj.api_key });
+        // 2. Routing Logic: Image vs Text Tools
+        if (imageBase64 || currentTool === 'thumb_audit' || currentTool === 'pitch') {
+            if (geminiKeys.length === 0) throw new Error("No Gemini keys found in Supabase.");
+            
+            // Loop sirf keys rotate karega, model KHALI gemini-2.0-flash rahega
+            for (let i = 0; i < geminiKeys.length; i++) {
+                try {
+                    const aiStudio = new GoogleGenAI({ apiKey: geminiKeys[i].api_key });
+                    const model = aiStudio.getGenerativeModel({ model: "gemini-2.0-flash" });
                     
-                    const systemPrompt = `You are the core intelligence of Orion AI Hub. You are an expert product manager, growth marketer, copywriter, and script doctor. Provide short, punchy, actionable advice with no fluff.`;
+                    const prompt = `Act as an expert content auditor for tool: ${currentTool}. Context: ${textInput}`;
+                    const imageParts = [{ inlineData: { data: imageBase64, mimeType: "image/jpeg" } }];
 
-                    const completion = await groq.chat.completions.create({
-                        messages: [
-                            { role: "system", content: systemPrompt },
-                            { role: "user", content: `Tool Name: ${toolMode}. Context: ${textPrompt}` }
-                        ],
-                        model: "llama3-8b-8192",
-                    });
-                    aiResponse = completion.choices[0].message.content;
-                } else {
-                    // --- GEMINI EXECUTION ---
-                    const ai = new GoogleGenAI({ apiKey: keyObj.api_key });
-                    const model = ai.getGenerativeModel({ model: "gemini-2.0-flash" });
-
-                    let promptParts = [`Tool Name: ${toolMode}. Analysis prompt: ${textPrompt}`];
-                    
-                    if (imageBase64) {
-                        const imagePart = {
-                            inlineData: {
-                                data: imageBase64.split(",")[1] || imageBase64,
-                                mimeType: "image/jpeg"
-                            },
-                        };
-                        promptParts.push(imagePart);
-                    }
-
-                    const result = await model.generateContent(promptParts);
-                    const response = await result.response;
-                    aiResponse = response.text();
+                    const result = await model.generateContent([prompt, ...imageParts]);
+                    return res.status(200).json({ response: result.response.text() });
+                } catch (err) {
+                    console.log(`Gemini Key index ${i} failed, trying next...`);
+                    if (i === geminiKeys.length - 1) throw err;
                 }
+            }
 
-                success = true;
-                break; // Agar call kamyab raha, loop ko break karo
+        } else {
+            if (groqKeys.length === 0) throw new Error("No Groq keys found in Supabase.");
 
-            } catch (apiError) {
-                console.error(`Key ID ${keyObj.id} fail ho gayi, status 429 triggered. Trying fallback backup key...`);
-                // Base automation: Fail key ko database mein auto 'expired' update kar sakte hain yahan
-                await supabase.from('api_keys').update({ status: 'expired' }).eq('id', keyObj.id);
+            // Loop sirf keys rotate karega, model KHALI llama-3.3-70b-versatile rahega
+            for (let i = 0; i < groqKeys.length; i++) {
+                try {
+                    const groq = new Groq({ apiKey: groqKeys[i].api_key });
+                    const chatCompletion = await groq.chat.completions.create({
+                        messages: [{ role: 'user', content: `Act as a Viral Creator Engine for tool: ${currentTool}. Context: ${textInput}` }],
+                        model: 'llama-3.3-70b-versatile',
+                    });
+                    return res.status(200).json({ response: chatCompletion.choices[0].message.content });
+                } catch (err) {
+                    console.log(`Groq Key index ${i} failed, trying next...`);
+                    if (i === groqKeys.length - 1) throw err;
+                }
             }
         }
 
-        if (!success) {
-            return res.status(500).json({ error: "Bhai saari keys exhaust ho gayi hain! Admin se bolo keys refresh kare." });
-        }
-
-        return res.status(200).json({ result: aiResponse });
-
     } catch (globalError) {
-        return res.status(500).json({ error: globalError.message });
+        return res.status(500).json({ error: "Bhai backend core me lafda hua h: " + globalError.message });
     }
-              }
-                      
+}
