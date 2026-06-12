@@ -4,12 +4,13 @@ import { Groq } from 'groq-sdk';
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY);
 
-// FIXED ADMINS & PAYPAL ENGINE MATRIX
+// PLATFORM OPERATIONS MATRIX
 const ORION_ADMINS = [
     "avijaiswal10052009@gmail.com",
     "Anonymousperson1508@gmail.com"
 ];
 const PAYPAL_BUSINESS_EMAIL = "Ishansrivastava651@gmail.com";
+const SUPPORT_EMAIL = "aaosamjhoai@gmail.com";
 
 export default async function handler(req, res) {
     res.setHeader('Access-Control-Allow-Credentials', true);
@@ -22,19 +23,14 @@ export default async function handler(req, res) {
     const { action } = req.query;
 
     try {
-        // ==========================================
-        // 1. QUICK USER SYNC ENGINE (WITHOUT PASSWORD)
-        // ==========================================
         if (action === 'sync-user' && req.method === 'POST') {
             const { email } = req.body;
-            if (!email) return res.status(400).json({ error: 'Email missing h bhai!' });
+            if (!email) return res.status(400).json({ error: 'Email mandatory parameter' });
 
             let { data: user } = await supabase.from('user_subscriptions').select('*').eq('email', email).single();
-
             let targetStatus = 'free';
             let initialTrials = 5;
 
-            // Direct check for admin access bypass
             if (ORION_ADMINS.includes(email)) {
                 targetStatus = 'admin';
                 initialTrials = 999999;
@@ -53,30 +49,20 @@ export default async function handler(req, res) {
                 if (insErr) throw insErr;
                 user = newUser;
             }
-
             return res.status(200).json({ success: true, user });
         }
 
-        // ==========================================
-        // 2. CONFIG ROUTER: HARDCODED CONFIG BACKUPS
-        // ==========================================
         if (action === 'get-config' && req.method === 'GET') {
             let { data, error } = await supabase.from('orion_config').select('*').eq('id', 1).single();
             if (error) {
-                // System Fallback values if table doesn't exist yet
                 return res.status(200).json({
                     weekly_price: 350, monthly_base: 2500, monthly_discount: 30,
-                    yearly_base: 10000, yearly_discount: 40, paypal_email: PAYPAL_BUSINESS_EMAIL
+                    yearly_base: 10000, yearly_discount: 40, paypal_email: PAYPAL_BUSINESS_EMAIL, support_email: SUPPORT_EMAIL
                 });
             }
             data.paypal_email = PAYPAL_BUSINESS_EMAIL; 
+            data.support_email = SUPPORT_EMAIL;
             return res.status(200).json(data);
-        }
-
-        if (action === 'save-config' && req.method === 'POST') {
-            const updates = req.body;
-            await supabase.from('orion_config').update(updates).eq('id', 1);
-            return res.status(200).json({ success: true });
         }
 
         if (action === 'submit-feedback' && req.method === 'POST') {
@@ -85,24 +71,10 @@ export default async function handler(req, res) {
             return res.status(201).json({ success: true });
         }
 
-        // ==========================================
-        // 3. API FALLBACK ROTATOR INTERFACES (ADMIN)
-        // ==========================================
-        if (action === 'add-api-key' && req.method === 'POST') {
-            const { provider, api_key } = req.body;
-            await supabase.from('api_keys').insert([{ provider, api_key, status: 'active' }]);
-            return res.status(201).json({ success: true });
-        }
-
-        // ==========================================
-        // 4. MAIN MULTIMODAL AI ROTATOR ENGINE
-        // ==========================================
         if (req.method === 'POST' && !action) {
             const { email, textInput, imageBase64, currentTool } = req.body;
-
             let { data: user } = await supabase.from('user_subscriptions').select('*').eq('email', email).single();
             
-            // Bypass security entirely for your two admin accounts
             let isUserAdmin = ORION_ADMINS.includes(email) || (user && user.status === 'admin');
 
             if (!isUserAdmin && user && user.status === 'free' && user.trials_left <= 0) {
@@ -110,7 +82,7 @@ export default async function handler(req, res) {
             }
 
             const { data: keys, error: kErr } = await supabase.from('api_keys').select('*').eq('status', 'active');
-            if (kErr || !keys || keys.length === 0) return res.status(500).json({ error: "API key loop missing h dynamic storage me." });
+            if (kErr || !keys || keys.length === 0) return res.status(500).json({ error: "No active keys inside rotator loop." });
 
             const geminiKeys = keys.filter(k => k.provider === 'gemini');
             const groqKeys = keys.filter(k => k.provider === 'groq');
@@ -152,14 +124,11 @@ export default async function handler(req, res) {
             if (user && user.status === 'free' && !isUserAdmin) {
                 await supabase.from('user_subscriptions').update({ trials_left: user.trials_left - 1 }).eq('email', email);
             }
-
             return res.status(200).json({ response: finalAIResponse });
         }
-
-        return res.status(405).json({ error: 'Method framework not defined' });
-
-    } catch (globalError) {
-        return res.status(500).json({ error: "Lafda execution error: " + globalError.message });
+        return res.status(405).json({ error: 'Framework misaligned' });
+    } catch (err) {
+        return res.status(500).json({ error: "Core engine fault: " + err.message });
     }
-                }
-                     
+    }
+                
