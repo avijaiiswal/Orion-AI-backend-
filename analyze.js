@@ -7,7 +7,7 @@ import Groq from 'groq-sdk';
 // Never expose this key to the frontend.
 const supabase = createClient(
     process.env.SUPABASE_URL="https://zdrmahoktoulfigsmptx.supabase.co";
-    process.env.SUPABASE_SERVICE_ROLE_KEY="sb_publishable_AGJaamf_G2JUdrco86c2ZQ_yo8nsZ9B";
+    process.env.SUPABASE_SERVICE_ROLE_KEY="sb_publishable_AGJaamf_G2JUdrco86c2ZQ_yo8nsZ9B"
 );
 
 const ORION_ADMINS = [
