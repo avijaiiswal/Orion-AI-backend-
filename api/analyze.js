@@ -36,6 +36,59 @@ const ORION_ADMINS = [
 const PAYPAL_BUSINESS_EMAIL = "Ishansrivastava651@gmail.com";
 const SUPPORT_EMAIL         = "aaosamjhoai@gmail.com";
 
+// ── EMAIL NOTIFICATIONS (Resend) ─────────────────────
+// Requires RESEND_API_KEY env var on the backend project.
+// If not set, email sending is silently skipped (feedback is still
+// saved to the database either way).
+//
+// FEEDBACK_NOTIFY_EMAIL: where admin notifications are sent.
+// FEEDBACK_FROM_EMAIL: the "from" address. Until you verify your own
+// domain on Resend, you MUST use "onboarding@resend.dev" here — Resend
+// rejects sends from unverified domains.
+const RESEND_API_KEY      = process.env.RESEND_API_KEY;
+const FEEDBACK_NOTIFY_EMAIL = process.env.FEEDBACK_NOTIFY_EMAIL || ORION_ADMINS[0];
+const FEEDBACK_FROM_EMAIL   = process.env.FEEDBACK_FROM_EMAIL || "onboarding@resend.dev";
+
+async function sendFeedbackEmail({ email, rating, text }) {
+    if (!RESEND_API_KEY) {
+        console.warn('[Orion] RESEND_API_KEY not set — skipping feedback email notification.');
+        return;
+    }
+    try {
+        const stars = '⭐'.repeat(Math.max(0, Math.min(5, Number(rating) || 0)));
+        const safeText = (text || '(no message)')
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+        const resp = await fetch('https://api.resend.com/emails', {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${RESEND_API_KEY}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                from: `Orion Hub <${FEEDBACK_FROM_EMAIL}>`,
+                to: [FEEDBACK_NOTIFY_EMAIL],
+                subject: `New Orion Hub Feedback (${rating}/5) from ${email}`,
+                html: `
+                    <h2>New Feedback Received</h2>
+                    <p><strong>From:</strong> ${email}</p>
+                    <p><strong>Rating:</strong> ${stars} (${rating}/5)</p>
+                    <p><strong>Message:</strong></p>
+                    <p style="white-space:pre-wrap;">${safeText}</p>
+                `
+            })
+        });
+
+        if (!resp.ok) {
+            const errBody = await resp.text();
+            console.error('[Orion] Resend email failed:', resp.status, errBody);
+        }
+    } catch (e) {
+        // Never let an email failure break feedback submission.
+        console.error('[Orion] Error sending feedback email:', e.message);
+    }
+}
+
 // ── TOOL PROMPTS ──────────────────────────────────────
 function buildPrompt(tool, context) {
     const prompts = {
@@ -173,6 +226,11 @@ export default async function handler(req, res) {
                 .from('user_feedbacks')
                 .insert([{ email: authedUser.email, rating_stars: rating, feedback_text: text || '' }]);
             if (error) throw error;
+
+            // Fire-and-forget admin notification — does not block or
+            // fail the response if email sending has issues.
+            await sendFeedbackEmail({ email: authedUser.email, rating, text });
+
             return res.status(201).json({ success: true });
         }
 
